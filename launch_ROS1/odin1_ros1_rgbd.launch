@@ -15,6 +15,13 @@
     <!-- Set RViz configuration file path -->
     <arg name="rviz_config" default="$(find odin_ros_driver)/config/odin_ros.rviz"/>
 
+    <!-- cloud_reprojection_node/image_overlay_node/rviz exist only to produce and
+         show a visualization overlay: nothing downstream (DAAAM, ros1_stream_sender)
+         consumes their topics. Default true preserves existing interactive/dev
+         behavior; set false for a headless robot deploy to save the CPU/GPU they'd
+         otherwise burn for no consumer. -->
+    <arg name="visualize" default="true"/>
+
     <!-- Launch main node -->
     <node name="$(arg node_name)" pkg="odin_ros_driver" type="host_sdk_sample" output="screen">
         <param name="config_file" value="$(arg config_file)"/>
@@ -30,16 +37,18 @@
         <param name="publish_rgbd" value="true"/>
     </node>
 
-    <node pkg="odin_ros_driver" type="cloud_reprojection_node" name="cloud_reprojection_node" output="screen" >
-        <rosparam command="load" file="$(find odin_ros_driver)/config/control_command.yaml"/>
-        <!-- calib_file_path left unset: node falls back to the shared runtime dir (~/.ros/odin_ros_driver/calib.yaml) -->
-    </node>
+    <group if="$(arg visualize)">
+        <node pkg="odin_ros_driver" type="cloud_reprojection_node" name="cloud_reprojection_node" output="screen" >
+            <rosparam command="load" file="$(find odin_ros_driver)/config/control_command.yaml"/>
+            <!-- calib_file_path left unset: node falls back to the shared runtime dir (~/.ros/odin_ros_driver/calib.yaml) -->
+        </node>
 
-    <!-- Image overlay node - overlays reprojected points on camera image -->
-    <node pkg="odin_ros_driver" type="image_overlay_node" name="image_overlay_node" output="screen" >
-        <rosparam command="load" file="$(find odin_ros_driver)/config/control_command.yaml"/>
-    </node>
+        <!-- Image overlay node - overlays reprojected points on camera image -->
+        <node pkg="odin_ros_driver" type="image_overlay_node" name="image_overlay_node" output="screen" >
+            <rosparam command="load" file="$(find odin_ros_driver)/config/control_command.yaml"/>
+        </node>
 
-    <!-- Launch RViz with configuration -->
-    <node name="rviz" pkg="rviz" type="rviz" args="-d $(arg rviz_config)" output="screen"/>
+        <!-- Launch RViz with configuration -->
+        <node name="rviz" pkg="rviz" type="rviz" args="-d $(arg rviz_config)" output="screen"/>
+    </group>
 </launch>
