@@ -159,6 +159,10 @@ int g_cloud_raw_confidence_threshold = 35;
 int g_dtof_fps = 145;  // DTOF sensor frame rate: 100 (10fps) or 145 (14.5fps)
 
 // RGB camera configuration
+int g_set_rgb_parameter = 0;  // opt-in: lidar_set_rgb_parameter() is unverified against our
+                               // device/firmware combo (v0.14.1) -- it errors out
+                               // (rc=-1, "device may be unresponsive") and the device then
+                               // streams frames that crash the decode path. Off by default.
 int g_rgb_format = 0;     // 0: NV12; 1: MJPEG
 int g_rgb_width = 1600;   // Image width in pixels
 int g_rgb_height = 1296;  // Image height in pixels
@@ -1720,7 +1724,7 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
 
         // Set RGB camera configuration (format, resolution, frame rate)
         // Must be called before lidar_start_stream() and lidar_activate_stream_type()
-        if (g_sendrgb) {
+        if (g_sendrgb && g_set_rgb_parameter) {
             lidar_rgb_para_t rgbPara;
             rgbPara.format = (lidar_rgb_format_e)g_rgb_format;
             rgbPara.width  = (uint32_t)g_rgb_width;
@@ -2534,6 +2538,7 @@ int main(int argc, char *argv[])
         g_cloud_raw_confidence_threshold = get_key_value("cloud_raw_confidence_threshold", 35);
         g_rosNodeControlImpl.setCloudRawConfidenceThreshold(g_cloud_raw_confidence_threshold);
         g_dtof_fps      = get_key_value("dtof_fps", 145);  // Read DTOF frame rate from config (100=10fps, 145=14.5fps)
+        g_set_rgb_parameter = get_key_value("set_rgb_parameter", 0);
         g_rgb_format    = get_key_value("rgb_format", 0);    // 0: NV12; 1: MJPEG
         g_rgb_width     = get_key_value("rgb_width", 1536);
         g_rgb_height    = get_key_value("rgb_height", 1280);

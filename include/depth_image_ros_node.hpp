@@ -32,6 +32,7 @@ limitations under the License.
 #include <Eigen/Dense>
 
 #include "pointcloud_depth_converter.hpp"
+#include "sensor2rgbd.hpp"
 
 #include <string>
 #include <memory>
@@ -52,6 +53,12 @@ private:
     std::string color_compressed_topic_;
     std::string depth_image_topic_;
     std::string depth_cloud_topic_;
+    std::string rgbd_color_topic_;
+    std::string rgbd_camera_info_topic_;
+
+    // Off by default — only a DAAAM-style RGB-D consumer needs these topics.
+    // See odin1_ros1_rgbd.launch to enable.
+    bool publish_rgbd_;
 
     message_filters::Subscriber<sensor_msgs::PointCloud2> cloud_sub_;
     message_filters::Subscriber<sensor_msgs::Image> color_sub_;
@@ -63,8 +70,11 @@ private:
 
     image_transport::Publisher depth_image_pub_;
     ros::Publisher depth_cloud_pub_;
+    image_transport::Publisher rgbd_color_pub_;
+    ros::Publisher rgbd_camera_info_pub_;
 
     std::unique_ptr<PointCloudToDepthConverter> depth_converter_;
+    std::unique_ptr<Sensor2Rgbd> sensor2rgbd_;
 
     PointCloudToDepthConverter::CameraParams loadCameraParams();
 
@@ -80,4 +90,6 @@ private:
 
     void publishDepthCloud(const pcl::PointCloud<pcl::PointXYZRGB> &colored_cloud,
                            const std_msgs::Header &header);
+
+    void publishRgbdColor(const cv::Mat &img, const std_msgs::Header &header);
 };

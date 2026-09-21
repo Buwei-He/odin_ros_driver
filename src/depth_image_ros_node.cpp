@@ -25,12 +25,19 @@ DepthImageRosNode::DepthImageRosNode(ros::NodeHandle &nh, ros::NodeHandle &pnh)
     pnh_.param<std::string>("color_compressed_topic_", color_compressed_topic_, std::string("/odin1/image/compressed"));
     pnh_.param<std::string>("depth_image_topic", depth_image_topic_, std::string("/odin1/depth_img_competetion"));
     pnh_.param<std::string>("depth_cloud_topic", depth_cloud_topic_, std::string("/odin1/depth_img_competetion_cloud"));
+    pnh_.param<std::string>("rgbd_color_topic", rgbd_color_topic_, std::string("/odin1/rgbd/color"));
+    pnh_.param<std::string>("rgbd_camera_info_topic", rgbd_camera_info_topic_, std::string("/odin1/rgbd/camera_info"));
+    pnh_.param<bool>("publish_rgbd", publish_rgbd_, false);
 
     ROS_INFO_STREAM("\n  cloud_raw_topic: " << cloud_raw_topic_
                 << "\n  color_raw_topic: " << color_raw_topic_
                 << "\n  color_compressed_topic: " << color_compressed_topic_
                 << "\n  depth_image_topic: " << depth_image_topic_
-                << "\n  depth_cloud_topic: " << depth_cloud_topic_);
+                << "\n  depth_cloud_topic: " << depth_cloud_topic_
+                << "\n  publish_rgbd: " << publish_rgbd_
+                << (publish_rgbd_ ? ("\n  rgbd_color_topic: " + rgbd_color_topic_ +
+                                     "\n  rgbd_camera_info_topic: " + rgbd_camera_info_topic_)
+                                  : std::string()));
 
     cloud_sub_.subscribe(nh_, cloud_raw_topic_, 1);
     color_sub_.subscribe(nh_, color_raw_topic_, 1);
@@ -41,6 +48,24 @@ DepthImageRosNode::DepthImageRosNode(ros::NodeHandle &nh, ros::NodeHandle &pnh)
 
     depth_image_pub_ = it_.advertise(depth_image_topic_, 1);
     depth_cloud_pub_ = nh_.advertise<sensor_msgs::PointCloud2>(depth_cloud_topic_, 1);
+
+    if (publish_rgbd_)
+    {
+        rgbd_color_pub_ = it_.advertise(rgbd_color_topic_, 1);
+        rgbd_camera_info_pub_ = nh_.advertise<sensor_msgs::CameraInfo>(rgbd_camera_info_topic_, 1);
+
+        Sensor2Rgbd::Params s2r_params;
+        s2r_params.native_width = camera_params.image_width;
+        s2r_params.native_height = camera_params.image_height;
+        s2r_params.output_width = camera_params.output_width;
+        s2r_params.output_height = camera_params.output_height;
+        s2r_params.A11 = camera_params.A11;
+        s2r_params.A12 = camera_params.A12;
+        s2r_params.A22 = camera_params.A22;
+        s2r_params.u0 = camera_params.u0;
+        s2r_params.v0 = camera_params.v0;
+        sensor2rgbd_ = std::make_unique<Sensor2Rgbd>(s2r_params);
+    }
 
     ROS_INFO("DepthImageRosNode initialized successfully");
 }
@@ -65,6 +90,26 @@ PointCloudToDepthConverter::CameraParams DepthImageRosNode::loadCameraParams()
     pnh_.param<double>("cam_0/k7", params.k7, 0.0);
 
     pnh_.param<double>("scale", params.scale, 7.0);
+
+    // Output size for the completed depth image, and (via generateColoredCloud)
+    // for the matching color feed. Default 640x518: a uniform 0.4x scale of the
+    // native 1600x1296 calibrated frame (1296*0.4=518.4, rounded down) — chosen
+    // to match percorso_odin_relay's ROS2-side target exactly, with NO crop.
+    // Verified against real bag data (second-floor-bed-1-people-resting.bag,
+    // 2026-08-27): the undistorted frame has no vignetting and depth's raw-cloud
+    // projection reaches all four edges, so a uniform scale is enough — no need
+    // to crop for coverage or vignetting reasons. See percorso_robot_ws docs.
+    pnh_.param<int>("output_width", params.output_width, 640);
+    pnh_.param<int>("output_height", params.output_height, 518);
+
+    // Starting point only, not verified against real depth output at this
+    // output size — see the edge_threshold comment on CameraParams. Scaled up
+    // from the native-resolution value (0.75) by 1600/640, following STATE.md's
+    // documented approach for the ROS2 relay's equivalent parameter. Retune by
+    // eye (does postProcessDepthImage still null out true flying-pixel
+    // artifacts at object edges, without also erasing valid smooth-surface
+    // depth?) once this can be checked against a live sensor.
+    pnh_.param<double>("edge_threshold", params.edge_threshold, 0.75 * 1600.0 / 640.0);
     pnh_.param<int>("point_sampling_rate", params.point_sampling_rate, 5);
 
     std::vector<double> Tcl_vec_param;
@@ -142,6 +187,12 @@ void DepthImageRosNode::syncCallback(const sensor_msgs::PointCloud2ConstPtr &clo
 
     publishDepthImage(result.depth_image, cloud_msg->header);
     publishDepthCloud(result.colored_cloud, cloud_msg->header);
+
+    if (publish_rgbd_)
+    {
+        publishRgbdColor(result.color_image, cloud_msg->header);
+        rgbd_camera_info_pub_.publish(sensor2rgbd_->buildCameraInfo(cloud_msg->header));
+    }
 }
 
 void DepthImageRosNode::publishDepthImage(const cv::Mat &img,
@@ -162,4 +213,10 @@ void DepthImageRosNode::publishDepthCloud(const pcl::PointCloud<pcl::PointXYZRGB
         cloud_msg.header = header;
         depth_cloud_pub_.publish(cloud_msg);
     }
+}
+
+void DepthImageRosNode::publishRgbdColor(const cv::Mat &img, const std_msgs::Header &header)
+{
+    sensor_msgs::ImagePtr color_msg = cv_bridge::CvImage(header, "bgr8", img).toImageMsg();
+    rgbd_color_pub_.publish(color_msg);
 }

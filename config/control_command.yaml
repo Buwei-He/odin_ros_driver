@@ -15,6 +15,19 @@ register_keys:
 
   # RGB data, decoded from original jpeg data from device, bgr8 format
   # Processed on host device
+  #
+  # FIXED (2026-09-01): previously crashed on real hardware immediately on
+  # streaming start (SIGSEGV inside libopencv_imgproc's parallel color
+  # conversion). Root cause found: device.format on each frame is unreliable
+  # -- observed reporting NV12 (0) while actually streaming valid MJPEG data
+  # (confirmed via the frame's own FF D8 FF E0 JPEG magic bytes). publishRgb()
+  # in host_sdk_sample.h was trusting that field and building a cv::Mat sized
+  # for raw NV12 (width*height*3/2 bytes) over a buffer that only held the
+  # much smaller compressed JPEG -- an out-of-bounds read. Fixed in our fork
+  # by detecting the real format from the data's own magic bytes instead of
+  # trusting device.format. Verified stable at ~10.2 Hz, 1600x1296, on real
+  # hardware. This is our own fix, not from Manifold (their SDK is closed
+  # source and this bug lives in the open ROS-wrapper layer, not in it).
   sendrgb: 1              # 0: off; 1: on
 
   # undistort rgb image processed from decoded rgb data.
@@ -76,6 +89,13 @@ register_keys:
   #   145     | 145      | 14.472 Hz      | 14.5 Hz
   #   290     | 100      | 28.92 Hz       | 10.0 Hz
   ########################################################
+
+  # Opt-in gate for the lidar_set_rgb_parameter() call below: unverified against our
+  # device/firmware (v0.14.1) with the values shipped here -- it fails
+  # (rc=-1, "device may be unresponsive") and the device then streams frames that
+  # crash the host-side decode. Leave 0 until a working combination is confirmed
+  # on real hardware; 0 preserves the pre-v0.14.2 behavior of not calling it at all.
+  set_rgb_parameter: 0   # 0: off (recommended for now); 1: on
 
   rgb_format: 1          # 0: NV12 ; 1: MJPEG(default)
   rgb_width: 1600        # Image width in pixels / 图像宽度（像素）

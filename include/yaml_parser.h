@@ -120,6 +120,7 @@ private:
         "senddtof",
         "cloud_raw_confidence_threshold",
         "dtof_fps",
+        "set_rgb_parameter",
         "rgb_format",
         "rgb_width",
         "rgb_height",

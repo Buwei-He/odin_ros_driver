@@ -123,9 +123,12 @@ PointCloudToDepthConverter::ProcessResult PointCloudToDepthConverter::processClo
 
         cv::Mat processed_depth = postProcessDepthImage(depth_img);
 
-        pcl::PointCloud<pcl::PointXYZRGB> colored_cloud = generateColoredCloud(processed_depth, image);
+        cv::Mat color_aligned = alignColorImage(image, processed_depth.size());
+
+        pcl::PointCloud<pcl::PointXYZRGB> colored_cloud = generateColoredCloud(processed_depth, color_aligned);
 
         result.depth_image = processed_depth;
+        result.color_image = color_aligned;
         result.colored_cloud = colored_cloud;
         result.success = true;
     }
@@ -191,9 +194,9 @@ cv::Mat PointCloudToDepthConverter::postProcessDepthImage(const cv::Mat &depth_i
         return cv::Mat();
     }
     
-    if (params_.image_width <= 0 || params_.image_height <= 0) {
-        std::cerr << "ERROR: Invalid target size: " 
-                  << params_.image_width << "x" << params_.image_height << std::endl;
+    if (params_.output_width <= 0 || params_.output_height <= 0) {
+        std::cerr << "ERROR: Invalid target size: "
+                  << params_.output_width << "x" << params_.output_height << std::endl;
         return cv::Mat();
     }
 
@@ -202,28 +205,28 @@ cv::Mat PointCloudToDepthConverter::postProcessDepthImage(const cv::Mat &depth_i
         std::cerr << "ERROR: Failed to create safe copy of input image!" << std::endl;
         return cv::Mat();
     }
-    
+
 
     cv::Mat depth_img_upsampled;
     try {
-        depth_img_upsampled = customResize(safe_input, cv::Size(1600, 1296));
+        depth_img_upsampled = customResize(safe_input, cv::Size(params_.output_width, params_.output_height));
     } catch (const std::exception& e) {
         std::cerr << "ERROR: Custom resize failed: " << e.what() << std::endl;
         return cv::Mat();
     }
-    
+
     if (depth_img_upsampled.empty()) {
         std::cerr << "ERROR: Resized image is empty!" << std::endl;
         return cv::Mat();
     }
-    
-    if (depth_img_upsampled.rows != 1296 || depth_img_upsampled.cols != 1600) {
-        std::cerr << "ERROR: Resized image has wrong dimensions: " 
+
+    if (depth_img_upsampled.rows != params_.output_height || depth_img_upsampled.cols != params_.output_width) {
+        std::cerr << "ERROR: Resized image has wrong dimensions: "
                   << depth_img_upsampled.cols << "x" << depth_img_upsampled.rows
-                  << " (expected " << 1600 << "x" << 1296 << ")" << std::endl;
+                  << " (expected " << params_.output_width << "x" << params_.output_height << ")" << std::endl;
         return cv::Mat();
     }
-    
+
 
     cv::Mat grad_x, grad_y, grad_magnitude;
     try {
@@ -244,7 +247,7 @@ cv::Mat PointCloudToDepthConverter::postProcessDepthImage(const cv::Mat &depth_i
 
     cv::Mat threshold_mask;
     try {
-        cv::threshold(grad_magnitude, threshold_mask, 0.75, 1, cv::THRESH_BINARY);
+        cv::threshold(grad_magnitude, threshold_mask, params_.edge_threshold, 1, cv::THRESH_BINARY);
         threshold_mask.convertTo(threshold_mask, CV_8U);
         
 
@@ -291,12 +294,32 @@ cv::Mat PointCloudToDepthConverter::customResize(const cv::Mat& src, const cv::S
     
     return dst;
 }
-pcl::PointCloud<pcl::PointXYZRGB> PointCloudToDepthConverter::generateColoredCloud(
-    const cv::Mat &depth_img, const cv::Mat &color_img)
+cv::Mat PointCloudToDepthConverter::alignColorImage(const cv::Mat &color_img, const cv::Size &target_size)
 {
-    cv::Mat depth_undistorted, color_undistorted;
-    depth_undistorted = depth_img.clone();
-    cv::remap(color_img, color_undistorted, inv_map_x_, inv_map_y_, cv::INTER_LINEAR);
+    // inv_map_x_/inv_map_y_ undistort at native resolution; resize afterward
+    // so both images index the same u,v grid.
+    cv::Mat color_undistorted_native, color_aligned;
+    cv::remap(color_img, color_undistorted_native, inv_map_x_, inv_map_y_, cv::INTER_LINEAR);
+    cv::resize(color_undistorted_native, color_aligned, target_size, 0, 0, cv::INTER_AREA);
+    return color_aligned;
+}
+
+pcl::PointCloud<pcl::PointXYZRGB> PointCloudToDepthConverter::generateColoredCloud(
+    const cv::Mat &depth_img, const cv::Mat &color_img_aligned)
+{
+    cv::Mat depth_undistorted = depth_img.clone();
+
+    // u,v below index the OUTPUT-resolution grid, not native — so the
+    // back-projection intrinsics must be scaled the same way, or points land
+    // at the wrong depth-implied (x,y). Uniform scale (no crop), so this is a
+    // straight multiply, same factor in x and y.
+    const double sx = static_cast<double>(params_.output_width) / params_.image_width;
+    const double sy = static_cast<double>(params_.output_height) / params_.image_height;
+    const double A11_s = params_.A11 * sx;
+    const double A12_s = params_.A12 * sx;
+    const double A22_s = params_.A22 * sy;
+    const double u0_s = params_.u0 * sx;
+    const double v0_s = params_.v0 * sy;
 
     pcl::PointCloud<pcl::PointXYZRGB> cloud_colored;
 
@@ -307,11 +330,11 @@ pcl::PointCloud<pcl::PointXYZRGB> PointCloudToDepthConverter::generateColoredClo
         for (int u = 0; u < depth_undistorted.cols; u += params_.point_sampling_rate)
         {
             float depth = depth_undistorted.at<float>(v, u);
-            if (depth > 0.1f && depth < 100.0f) 
+            if (depth > 0.1f && depth < 100.0f)
             {
-                double y_cam = (v - params_.v0) * depth / params_.A22;
-                double x_cam = ((u - params_.u0) * depth  - params_.A12 * y_cam)/ params_.A11;
-                
+                double y_cam = (v - v0_s) * depth / A22_s;
+                double x_cam = ((u - u0_s) * depth  - A12_s * y_cam)/ A11_s;
+
                 double z_cam = depth;
 
                 Eigen::Vector4d point_cam(x_cam, y_cam, z_cam, 1.0);
@@ -323,9 +346,9 @@ pcl::PointCloud<pcl::PointXYZRGB> PointCloudToDepthConverter::generateColoredClo
                 point.y = static_cast<float>(point_lidar[1]);
                 point.z = static_cast<float>(point_lidar[2]);
 
-                if (u < color_undistorted.cols && v < color_undistorted.rows)
+                if (u < color_img_aligned.cols && v < color_img_aligned.rows)
                 {
-                    cv::Vec3b color = color_undistorted.at<cv::Vec3b>(v, u);
+                    cv::Vec3b color = color_img_aligned.at<cv::Vec3b>(v, u);
                     point.b = color[0]; 
                     point.g = color[1];
                     point.r = color[2];

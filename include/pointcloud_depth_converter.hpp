@@ -29,18 +29,42 @@ public:
     {
         int image_width;
         int image_height;
-        double A11, A12, A22;          
-        double u0, v0;                 
-        double k2, k3, k4, k5, k6, k7; 
-        double scale;                  
-        int point_sampling_rate;      
-        Eigen::Matrix4d Tcl;       
+        double A11, A12, A22;
+        double u0, v0;
+        double k2, k3, k4, k5, k6, k7;
+        double scale;
+        int point_sampling_rate;
+        Eigen::Matrix4d Tcl;
+
+        // Final output size for the completed depth image (and, downstream, for
+        // the matching color-undistorted feed to generateColoredCloud). Generating
+        // directly at this size — rather than at image_width x image_height and
+        // downscaling afterward — is the whole point: the expensive densify+Sobel
+        // pass in postProcessDepthImage runs on far fewer pixels. Must be the SAME
+        // resolution the RGB side is downscaled to downstream, or depth and RGB
+        // stop being one-to-one. No cropping here: a uniform scale of the full
+        // calibrated frame preserves the shared optical axis with image_undistort;
+        // see percorso_robot_ws docs for how that was verified against real data.
+        int output_width;
+        int output_height;
+
+        // Gradient-magnitude threshold (in the depth image's own units, i.e.
+        // metres of jump per pixel step) used to null out flying-pixel artifacts
+        // at depth discontinuities after upsampling. Empirically needs to scale
+        // with output resolution (see postProcessDepthImage) — treat the default
+        // as a starting point, not a verified constant, until checked against
+        // real depth output at whatever output_width/height are actually in use.
+        double edge_threshold;
     };
 
 
     struct ProcessResult
     {
         cv::Mat depth_image;
+        // Undistorted color resized to depth_image's size — already computed
+        // by generateColoredCloud for point-cloud coloring, so exposing it
+        // here for publishing is free.
+        cv::Mat color_image;
         pcl::PointCloud<pcl::PointXYZRGB> colored_cloud;
         bool success;
         std::string error_message;
@@ -83,9 +107,12 @@ private:
 
     cv::Mat postProcessDepthImage(const cv::Mat &depth_img);
 
+    // Undistorts and resizes color_img to target_size; shared by
+    // generateColoredCloud and anything publishing the aligned RGB directly.
+    cv::Mat alignColorImage(const cv::Mat &color_img, const cv::Size &target_size);
 
     pcl::PointCloud<pcl::PointXYZRGB> generateColoredCloud(const cv::Mat &depth_img,
-                                                           const cv::Mat &color_img);
+                                                           const cv::Mat &color_img_aligned);
 
 
     std::pair<bool, std::string> validateInputs(const pcl::PointCloud<pcl::PointXYZ> &cloud,

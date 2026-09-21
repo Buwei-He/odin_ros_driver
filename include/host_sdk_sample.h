@@ -807,9 +807,28 @@ void publishRgb(capture_Image_List_t *stream) {
     cv::Mat decoded_image;
     std::vector<uint8_t> raw_data;
 
-    if (image.format == LIDAR_RGB_FMT_NV12) {
+    // image.format is not trustworthy: observed reporting NV12 (0) while the
+    // device was actually streaming MJPEG (confirmed by the JPEG SOI/APP0
+    // magic bytes FF D8 FF E0 at the start of the buffer). Treating that
+    // JPEG buffer as raw NV12 constructs a cv::Mat claiming width*height*3/2
+    // bytes (e.g. 3,110,400 for 1600x1296) over a buffer that's actually only
+    // the compressed JPEG size (e.g. 563,797 bytes) -- a large out-of-bounds
+    // read that segfaults inside cv::cvtColor's parallel color-conversion
+    // workers. Detect the real format from the data itself instead of
+    // trusting the field: JPEG always starts with FF D8.
+    const bool looks_like_jpeg = image.length >= 2 &&
+        static_cast<uint8_t*>(image.pAddr)[0] == 0xFF &&
+        static_cast<uint8_t*>(image.pAddr)[1] == 0xD8;
+
+    if (image.format == LIDAR_RGB_FMT_NV12 && !looks_like_jpeg) {
         // NV12 format: Y plane (width*height) + interleaved UV plane (width*height/2)
         // Total size = width * height * 3 / 2
+        const size_t expected_len = static_cast<size_t>(image.width) * image.height * 3 / 2;
+        if (image.length < expected_len) {
+            ROS_WARN_THROTTLE(5, "Dropping RGB frame: NV12 buffer too small (got %u bytes, need %zu for %ux%u)",
+                               image.length, expected_len, image.width, image.height);
+            return;
+        }
         cv::Mat nv12_mat(image.height * 3 / 2, image.width, CV_8UC1, image.pAddr);
         cv::cvtColor(nv12_mat, decoded_image, cv::COLOR_YUV2BGR_NV12);
 

@@ -215,7 +215,7 @@ if(ROS_VERSION STREQUAL "ROS1")
     ${OpenCV_LIBS}
     ${PCL_LIBRARIES}
     )
-    add_library(depth_image_ros_node src/depth_image_ros_node.cpp)
+    add_library(depth_image_ros_node src/depth_image_ros_node.cpp src/sensor2rgbd.cpp)
     target_link_libraries(depth_image_ros_node
     pointcloud_depth_converter
     ${catkin_LIBRARIES}
@@ -251,10 +251,17 @@ if(ROS_VERSION STREQUAL "ROS1")
     )
 
     # Installation rules
-    install(TARGETS host_sdk_sample
+    # host_sdk_sample was the only target installed here upstream -- pcd2depth_node,
+    # cloud_reprojection_node and image_overlay_node (plus the libraries they link)
+    # were built but never shipped to an install space, which is exactly why the
+    # robot's prior deploy only ever had host_sdk_sample.
+    install(TARGETS host_sdk_sample pcd2depth_node cloud_reprojection_node image_overlay_node
         RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
     )
-    
+    install(TARGETS pointcloud_depth_converter depth_image_ros_node cloud_reprojector
+        LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+    )
+
     install(DIRECTORY include/
         DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
         FILES_MATCHING PATTERN "*.h"
@@ -262,6 +269,11 @@ if(ROS_VERSION STREQUAL "ROS1")
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config")
         install(DIRECTORY config/
             DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config
+        )
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launch_ROS1")
+        install(DIRECTORY launch_ROS1/
+            DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
         )
     endif()
 
